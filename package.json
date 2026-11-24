@@ -2,9 +2,13 @@
   "name": "travel-journal-root",
   "private": true,
   "scripts": {
-    "dev": "npm run dev --prefix client",
+    "dev": "concurrently \"npm run dev --prefix server\" \"npm run dev --prefix client\"",
+    "start": "concurrently \"npm run dev --prefix server\" \"npm run dev --prefix client\"",
     "client": "npm run dev --prefix client",
     "server": "npm run dev --prefix server",
     "seed": "npm run seed --prefix server"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2"
   }
 }
