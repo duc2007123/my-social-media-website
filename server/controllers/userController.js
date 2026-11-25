@@ -35,12 +35,18 @@ export const followUser = async (req, res, next) => {
       return res.status(400).json({ success: false, message: 'Bạn không thể tự theo dõi chính mình' });
     }
 
+    let followersCount = 0;
     if (mongoose.connection.readyState === 1) {
       const targetUser = await User.findById(targetUserId);
       if (!targetUser) return res.status(404).json({ success: false, message: 'Không tìm thấy người dùng' });
 
       await User.findByIdAndUpdate(currentUserId, { $addToSet: { following: targetUserId } });
-      await User.findByIdAndUpdate(targetUserId, { $addToSet: { followers: currentUserId } });
+      const updatedTarget = await User.findByIdAndUpdate(
+        targetUserId,
+        { $addToSet: { followers: currentUserId } },
+        { new: true }
+      );
+      followersCount = updatedTarget?.followers?.length || 0;
 
       sendNotificationToUser(targetUserId, {
         type: 'follow',
@@ -50,49 +56,120 @@ export const followUser = async (req, res, next) => {
       });
     }
 
-    res.status(200).json({ success: true, message: 'Đã theo dõi người dùng', isFollowing: true });
+    res.status(200).json({
+      success: true,
+      message: 'Đã theo dõi người dùng thành công',
+      isFollowing: true,
+      followersCount
+    });
   } catch (error) {
     next(error);
   }
 };
 
 // @desc    Unfollow a user
-// @route   POST /api/users/:id/unfollow
+// @route   POST /api/users/:id/unfollow or DELETE /api/users/:id/follow
 // @access  Private
 export const unfollowUser = async (req, res, next) => {
   try {
     const targetUserId = req.params.id;
     const currentUserId = req.user._id;
 
-    if (mongoose.connection.readyState === 1) {
-      await User.findByIdAndUpdate(currentUserId, { $pull: { following: targetUserId } });
-      await User.findByIdAndUpdate(targetUserId, { $pull: { followers: currentUserId } });
+    if (targetUserId.toString() === currentUserId.toString()) {
+      return res.status(400).json({ success: false, message: 'Bạn không thể tự hủy theo dõi chính mình' });
     }
 
-    res.status(200).json({ success: true, message: 'Đã hủy theo dõi người dùng', isFollowing: false });
+    let followersCount = 0;
+    if (mongoose.connection.readyState === 1) {
+      const targetUser = await User.findById(targetUserId);
+      if (!targetUser) return res.status(404).json({ success: false, message: 'Không tìm thấy người dùng' });
+
+      await User.findByIdAndUpdate(currentUserId, { $pull: { following: targetUserId } });
+      const updatedTarget = await User.findByIdAndUpdate(
+        targetUserId,
+        { $pull: { followers: currentUserId } },
+        { new: true }
+      );
+      followersCount = updatedTarget?.followers?.length || 0;
+    }
+
+    res.status(200).json({
+      success: true,
+      message: 'Đã hủy theo dõi người dùng thành công',
+      isFollowing: false,
+      followersCount
+    });
   } catch (error) {
     next(error);
   }
 };
 
-// @desc    Lock / Unlock User account
-// @route   PUT /api/users/:id/lock
+// @desc    Lock / Unlock User account (toggle or explicit state)
+// @route   PUT /api/users/:id/lock, PATCH /api/users/:id/lock
 // @access  Private (Admin Only)
 export const toggleLockUser = async (req, res, next) => {
   try {
-    if (mongoose.connection.readyState === 1) {
-      const user = await User.findById(req.params.id);
-      if (!user) return res.status(404).json({ success: false, message: 'Không tìm thấy người dùng' });
-      if (user.role === 'admin') return res.status(400).json({ success: false, message: 'Không thể khóa tài khoản Admin' });
+    const targetUserId = req.params.id;
+    const currentUserId = req.user?._id;
 
-      user.isLocked = !user.isLocked;
-      await user.save();
-      return res.status(200).json({ success: true, message: user.isLocked ? `Đã khóa tài khoản` : `Đã mở khóa tài khoản`, isLocked: user.isLocked });
+    if (currentUserId && targetUserId.toString() === currentUserId.toString()) {
+      return res.status(400).json({ success: false, message: 'Bạn không thể tự khóa tài khoản của chính mình' });
     }
-    res.status(200).json({ success: true, message: 'Đã cập nhật trạng thái tài khoản', isLocked: true });
+
+    if (mongoose.connection.readyState === 1) {
+      const user = await User.findById(targetUserId);
+      if (!user) return res.status(404).json({ success: false, message: 'Không tìm thấy người dùng' });
+      if (user.role === 'admin') return res.status(400).json({ success: false, message: 'Không thể khóa tài khoản Quản trị viên (Admin)' });
+
+      if (typeof req.body.isLocked === 'boolean') {
+        user.isLocked = req.body.isLocked;
+      } else {
+        user.isLocked = !user.isLocked;
+      }
+      await user.save();
+
+      return res.status(200).json({
+        success: true,
+        message: user.isLocked ? 'Đã khóa tài khoản người dùng thành công' : 'Đã mở khóa tài khoản người dùng thành công',
+        isLocked: user.isLocked,
+        data: {
+          _id: user._id,
+          name: user.name,
+          username: user.username,
+          isLocked: user.isLocked
+        }
+      });
+    }
+
+    // Fallback mode for offline testing
+    let newLockedState = true;
+    if (typeof req.body.isLocked === 'boolean') {
+      newLockedState = req.body.isLocked;
+    }
+    res.status(200).json({
+      success: true,
+      message: newLockedState ? 'Đã khóa tài khoản người dùng thành công (Dự phòng)' : 'Đã mở khóa tài khoản người dùng thành công (Dự phòng)',
+      isLocked: newLockedState
+    });
   } catch (error) {
     next(error);
   }
+};
+
+// @desc    Explicitly Lock User account
+// @route   PUT /api/users/:id/lock
+// @access  Private (Admin Only)
+export const lockUser = async (req, res, next) => {
+  req.body.isLocked = true;
+  return toggleLockUser(req, res, next);
+};
+
+// @desc    Explicitly Unlock User account
+// @route   PUT /api/users/:id/unlock
+// @access  Private (Admin Only)
+export const unlockUser = async (req, res, next) => {
+  req.body.isLocked = false;
+  return toggleLockUser(req, res, next);
 };
 
 // @desc    Get smart follow suggestions

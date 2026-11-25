@@ -26,39 +26,51 @@ export const getTopLocations = async (req, res, next) => {
       });
     }
 
-    // MongoDB Aggregation Pipeline
+    // MongoDB Aggregation Pipeline: Thống kê top địa điểm du lịch được nhắc đến nhiều nhất
     const stats = await Post.aggregate([
+      // Bước 1: Lọc bài viết có trường location hợp lệ (tồn tại, là chuỗi và không rỗng)
       {
         $match: {
-          location: { $exists: true, $ne: '' }
+          location: { $exists: true, $ne: null, $type: 'string' },
+          $expr: { $gt: [{ $strLenCP: { $trim: { input: '$location' } } }, 0] }
         }
       },
+      // Bước 2: Nhóm theo tên địa điểm (chuẩn hóa chữ thường & cắt khoảng trắng thừa để tránh trùng lặp)
       {
         $group: {
           _id: { $toLower: { $trim: { input: '$location' } } },
           locationName: { $first: '$location' },
-          postCount: { $sum: 1 },
-          totalLikes: { $sum: { $size: { $ifNull: ['$likes', []] } } },
-          avgCost: { $avg: '$cost' },
+          postCount: { $sum: 1 }, // Đếm tổng số bài viết nhắc đến địa điểm
+          totalLikes: { $sum: { $size: { $ifNull: ['$likes', []] } } }, // Tổng số lượt thích của các bài viết
+          avgCost: { $avg: '$cost' }, // Chi phí trung bình của chuyến đi
           sampleCoordinates: { $first: '$coordinates' }
         }
       },
+      // Bước 3: Sắp xếp theo số bài viết được nhắc đến nhiều nhất (giảm dần), kế tiếp theo lượt thích
       {
         $sort: {
           postCount: -1,
           totalLikes: -1
         }
       },
+      // Bước 4: Giới hạn số lượng top địa điểm (mặc định 10 địa điểm dẫn đầu)
       {
         $limit: limit
       },
+      // Bước 5: Định dạng kết quả đầu ra trực quan
       {
         $project: {
           _id: 0,
           location: '$locationName',
           postCount: 1,
           totalLikes: 1,
-          avgCost: { $round: ['$avgCost', 0] },
+          avgCost: {
+            $cond: {
+              if: { $and: [{ $ne: ['$avgCost', null] }, { $gte: ['$avgCost', 0] }] },
+              then: { $round: ['$avgCost', 0] },
+              else: 0
+            }
+          },
           coordinates: '$sampleCoordinates'
         }
       }
