@@ -119,15 +119,28 @@ export const getFeedPosts = async (req, res, next) => {
     const isDbConnected = mongoose.connection.readyState === 1;
 
     if (!isDbConnected) {
-      // Offline fallback
+      // Offline fallback with follower-only privacy filter
+      let visibleFallback = fallbackPosts;
+      if (!req.user) {
+        visibleFallback = fallbackPosts.filter((p) => p.visibility === 'public');
+      } else if (req.user.role !== 'admin') {
+        const uId = req.user._id.toString();
+        const following = (req.user.following || []).map((id) => id.toString());
+        visibleFallback = fallbackPosts.filter((p) => {
+          if (p.visibility === 'public') return true;
+          const authorId = (p.author?._id || p.author).toString();
+          return authorId === uId || following.includes(authorId);
+        });
+      }
+
       return res.status(200).json({
         success: true,
-        count: fallbackPosts.length,
-        total: fallbackPosts.length,
+        count: visibleFallback.length,
+        total: visibleFallback.length,
         page: 1,
         pages: 1,
         hasMore: false,
-        data: fallbackPosts
+        data: visibleFallback
       });
     }
 
@@ -235,7 +248,8 @@ export const getPostById = async (req, res, next) => {
       }
 
       const isAuthor = post.author._id.toString() === req.user._id.toString();
-      const isFollowing = post.author.followers.some((fId) => fId.toString() === req.user._id.toString());
+      const authorFollowers = post.author?.followers || [];
+      const isFollowing = authorFollowers.some((fId) => (fId._id || fId).toString() === req.user._id.toString());
 
       if (!isAuthor && !isFollowing && req.user.role !== 'admin') {
         return res.status(403).json({
@@ -348,7 +362,43 @@ export const createPost = async (req, res, next) => {
 // @access  Private
 export const updatePost = async (req, res, next) => {
   try {
+    const { title, content, location, travelDate, cost, visibility, lat, lng } = req.body;
+    let newImages = null;
+    if (req.files && req.files.length > 0) {
+      newImages = req.files.map((file) => `/uploads/${file.filename}`);
+    } else if (req.body.images) {
+      const parsedImages = Array.isArray(req.body.images) ? req.body.images : [req.body.images];
+      if (parsedImages.length <= 6) {
+        newImages = parsedImages;
+      }
+    }
+
+    let hashtags = null;
+    if (content) {
+      const hashtagRegex = /#([\p{L}\p{N}_]+)/gu;
+      const matches = content.match(hashtagRegex) || [];
+      hashtags = Array.from(new Set(matches.map((h) => h.replace(/^#/, '').toLowerCase())));
+    }
+
     if (mongoose.connection.readyState !== 1) {
+      const post = fallbackPosts.find((p) => p._id === req.params.id);
+      if (post) {
+        if (title) post.title = title;
+        if (content) {
+          post.content = content;
+          post.hashtags = hashtags;
+        }
+        if (location) {
+          post.location = location;
+          post.coordinates = resolveCoordinates(location, { lat: parseFloat(lat), lng: parseFloat(lng) });
+        }
+        if (travelDate) post.travelDate = travelDate;
+        if (cost !== undefined) post.cost = parseFloat(cost);
+        if (visibility) post.visibility = visibility;
+        if (newImages) post.images = newImages;
+
+        return res.status(200).json({ success: true, message: 'Cập nhật bài viết thành công', data: post });
+      }
       return res.status(200).json({ success: true, message: 'Cập nhật bài viết thành công' });
     }
 
@@ -361,9 +411,11 @@ export const updatePost = async (req, res, next) => {
       return res.status(403).json({ success: false, message: 'Bạn không có quyền chỉnh sửa bài viết này' });
     }
 
-    const { title, content, location, travelDate, cost, visibility, lat, lng } = req.body;
     if (title) post.title = title;
-    if (content) post.content = content;
+    if (content) {
+      post.content = content;
+      post.hashtags = hashtags;
+    }
     if (location) {
       post.location = location;
       post.coordinates = resolveCoordinates(location, { lat: parseFloat(lat), lng: parseFloat(lng) });
@@ -371,6 +423,7 @@ export const updatePost = async (req, res, next) => {
     if (travelDate) post.travelDate = travelDate;
     if (cost !== undefined) post.cost = parseFloat(cost);
     if (visibility) post.visibility = visibility;
+    if (newImages) post.images = newImages;
 
     await post.save();
     const updatedPost = await Post.findById(post._id).populate('author', 'name username avatar role');
@@ -397,6 +450,11 @@ export const deletePost = async (req, res, next) => {
 
       await Post.findByIdAndDelete(req.params.id);
       await Comment.deleteMany({ post: req.params.id });
+    } else {
+      const index = fallbackPosts.findIndex((p) => p._id === req.params.id);
+      if (index !== -1) {
+        fallbackPosts.splice(index, 1);
+      }
     }
     res.status(200).json({ success: true, message: 'Đã xóa bài viết thành công' });
   } catch (error) {
@@ -414,9 +472,9 @@ export const toggleLikePost = async (req, res, next) => {
       const post = fallbackPosts.find((p) => p._id === req.params.id);
       if (post) {
         const uId = req.user._id.toString();
-        const hasLiked = post.likes.includes(uId);
+        const hasLiked = post.likes.some((id) => id.toString() === uId);
         if (hasLiked) {
-          post.likes = post.likes.filter((id) => id !== uId);
+          post.likes = post.likes.filter((id) => id.toString() !== uId);
         } else {
           post.likes.push(uId);
         }
@@ -439,39 +497,45 @@ export const toggleLikePost = async (req, res, next) => {
     const isLiked = post.likes.some((id) => id.toString() === userId.toString());
 
     if (isLiked) {
-      post.likes = post.likes.filter((id) => id.toString() !== userId.toString());
-      await post.save();
-      broadcastPostLikeUpdate(post._id, post.likes.length, post.likes);
+      // Atomic anti-duplicate unlike
+      const updatedPost = await Post.findByIdAndUpdate(
+        req.params.id,
+        { $pull: { likes: userId } },
+        { new: true }
+      );
+      broadcastPostLikeUpdate(updatedPost._id, updatedPost.likes.length, updatedPost.likes);
 
       return res.status(200).json({
         success: true,
         message: 'Đã bỏ thích bài viết',
         isLiked: false,
-        likesCount: post.likes.length
+        likesCount: updatedPost.likes.length
       });
     } else {
-      if (!post.likes.includes(userId)) {
-        post.likes.push(userId);
-        await post.save();
+      // Atomic anti-duplicate like via $addToSet
+      const updatedPost = await Post.findByIdAndUpdate(
+        req.params.id,
+        { $addToSet: { likes: userId } },
+        { new: true }
+      );
 
-        if (post.author.toString() !== userId.toString()) {
-          sendNotificationToUser(post.author, {
-            type: 'like',
-            sender: { _id: req.user._id, name: req.user.name, avatar: req.user.avatar },
-            post: { _id: post._id, title: post.title },
-            message: `${req.user.name} đã thích bài viết của bạn`,
-            createdAt: new Date()
-          });
-        }
+      if (post.author.toString() !== userId.toString()) {
+        sendNotificationToUser(post.author, {
+          type: 'like',
+          sender: { _id: req.user._id, name: req.user.name, avatar: req.user.avatar },
+          post: { _id: post._id, title: post.title },
+          message: `${req.user.name} đã thích bài viết của bạn`,
+          createdAt: new Date()
+        });
       }
 
-      broadcastPostLikeUpdate(post._id, post.likes.length, post.likes);
+      broadcastPostLikeUpdate(updatedPost._id, updatedPost.likes.length, updatedPost.likes);
 
       return res.status(200).json({
         success: true,
         message: 'Đã thích bài viết',
         isLiked: true,
-        likesCount: post.likes.length
+        likesCount: updatedPost.likes.length
       });
     }
   } catch (error) {
