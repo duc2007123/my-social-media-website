@@ -119,11 +119,9 @@ export const PostForm = ({ postToEdit = null, isEdit = false }) => {
         data.append('images', file);
       });
 
-      // Append existing image URLs if editing
+      // Send retained image URLs separately so the server can combine them with newly uploaded files.
       if (isEdit) {
-        existingImages.forEach((imgUrl) => {
-          data.append('images', imgUrl);
-        });
+        data.append('existingImages', JSON.stringify(existingImages));
       }
 
       const headers = {

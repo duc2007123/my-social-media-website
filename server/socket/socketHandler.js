@@ -1,4 +1,5 @@
 import { Server } from 'socket.io';
+import jwt from 'jsonwebtoken';
 
 let ioInstance = null;
 const onlineUsers = new Map(); // userId -> socketId
@@ -15,13 +16,37 @@ export const initSocket = (server, clientUrl) => {
   io.on('connection', (socket) => {
     console.log(`[Socket.IO] New client connected: ${socket.id}`);
 
-    // Register user when authenticated
-    socket.on('register_user', (userId) => {
-      if (userId) {
-        onlineUsers.set(userId.toString(), socket.id);
-        socket.join(`user_${userId}`);
-        console.log(`[Socket.IO] User registered: ${userId} -> Socket: ${socket.id}`);
+    // Register user only after verifying the submitted access token.
+    socket.on('register_user', ({ userId, token } = {}) => {
+      if (!userId || !token) return;
+
+      try {
+        const decoded = jwt.verify(token, process.env.JWT_SECRET || 'supersecretjwtkey_traveljournal_btl_2026');
+        if (decoded.id?.toString() !== userId.toString()) return;
+      } catch {
+        return;
       }
+
+      const normalizedUserId = userId.toString();
+      const previousUserId = socket.data.userId;
+      if (previousUserId && previousUserId !== normalizedUserId) {
+        socket.leave(`user_${previousUserId}`);
+        if (onlineUsers.get(previousUserId) === socket.id) onlineUsers.delete(previousUserId);
+      }
+
+      socket.data.userId = normalizedUserId;
+      onlineUsers.set(normalizedUserId, socket.id);
+      socket.join(`user_${normalizedUserId}`);
+      console.log(`[Socket.IO] User registered: ${normalizedUserId} -> Socket: ${socket.id}`);
+    });
+
+    socket.on('unregister_user', () => {
+      const userId = socket.data.userId;
+      if (!userId) return;
+
+      socket.leave(`user_${userId}`);
+      if (onlineUsers.get(userId) === socket.id) onlineUsers.delete(userId);
+      socket.data.userId = null;
     });
 
     // Handle disconnect

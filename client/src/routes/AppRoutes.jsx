@@ -6,6 +6,7 @@ import FeedPage from '../pages/FeedPage';
 import MapPage from '../pages/MapPage';
 import ProfilePage from '../pages/ProfilePage';
 import CreatePostPage from '../pages/CreatePostPage';
+import EditPostPage from '../pages/EditPostPage';
 import AdminPage from '../pages/AdminPage';
 import LoginPage from '../pages/LoginPage';
 import RegisterPage from '../pages/RegisterPage';
@@ -31,6 +32,16 @@ export const AppRoutes = () => {
           element={
             <ProtectedRoute>
               <CreatePostPage />
+            </ProtectedRoute>
+          }
+        />
+
+        {/* Protected Route: Edit Post */}
+        <Route
+          path="edit-post/:id"
+          element={
+            <ProtectedRoute>
+              <EditPostPage />
             </ProtectedRoute>
           }
         />

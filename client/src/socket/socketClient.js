@@ -8,11 +8,23 @@ export const socket = io(SOCKET_URL, {
   transports: ['websocket', 'polling']
 });
 
-// Helper to register authenticated user on socket
-export const registerSocketUser = (userId) => {
-  if (userId && socket.connected) {
-    socket.emit('register_user', userId);
+let registeredUser = null;
+
+socket.on('connect', () => {
+  if (registeredUser) {
+    socket.emit('register_user', registeredUser);
   }
+});
+
+// Register authenticated users now and again after reconnects.
+export const registerSocketUser = (userId, token) => {
+  registeredUser = userId && token ? { userId: userId.toString(), token } : null;
+  if (registeredUser && socket.connected) socket.emit('register_user', registeredUser);
+};
+
+export const unregisterSocketUser = () => {
+  registeredUser = null;
+  if (socket.connected) socket.emit('unregister_user');
 };
 
 export default socket;

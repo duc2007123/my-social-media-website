@@ -1,6 +1,6 @@
-import { createContext, useContext, useState, useEffect } from 'react';
+import { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
-import { socket, registerSocketUser } from '../socket/socketClient';
+import { registerSocketUser, unregisterSocketUser } from '../socket/socketClient';
 
 const AuthContext = createContext(null);
 
@@ -11,6 +11,14 @@ export const AuthProvider = ({ children }) => {
   });
   const [token, setToken] = useState(() => localStorage.getItem('token') || null);
   const [loading, setLoading] = useState(true);
+
+  const logout = useCallback(() => {
+    unregisterSocketUser();
+    setToken(null);
+    setUser(null);
+    localStorage.removeItem('token');
+    localStorage.removeItem('user');
+  }, []);
 
   // Check token and fetch current user profile
   useEffect(() => {
@@ -23,8 +31,8 @@ export const AuthProvider = ({ children }) => {
           });
           setUser(res.data.data);
           localStorage.setItem('user', JSON.stringify(res.data.data));
-          registerSocketUser(res.data.data._id);
-        } catch (err) {
+          registerSocketUser(res.data.data._id, storedToken);
+        } catch {
           console.warn('[Auth] Token expired or invalid, logging out');
           logout();
         }
@@ -33,7 +41,7 @@ export const AuthProvider = ({ children }) => {
     };
 
     verifyAuth();
-  }, [token]);
+  }, [token, logout]);
 
   const login = async (emailOrUsername, password) => {
     const res = await axios.post('/api/auth/login', { emailOrUsername, password });
@@ -42,7 +50,7 @@ export const AuthProvider = ({ children }) => {
     setUser(userData);
     localStorage.setItem('token', newToken);
     localStorage.setItem('user', JSON.stringify(userData));
-    registerSocketUser(userData._id);
+    registerSocketUser(userData._id, newToken);
     return res.data;
   };
 
@@ -53,15 +61,8 @@ export const AuthProvider = ({ children }) => {
     setUser(userData);
     localStorage.setItem('token', newToken);
     localStorage.setItem('user', JSON.stringify(userData));
-    registerSocketUser(userData._id);
+    registerSocketUser(userData._id, newToken);
     return res.data;
-  };
-
-  const logout = () => {
-    setToken(null);
-    setUser(null);
-    localStorage.removeItem('token');
-    localStorage.removeItem('user');
   };
 
   return (

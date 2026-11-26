@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { Compass, Users, Sparkles, Filter, RefreshCw } from 'lucide-react';
+import { Compass, Users, RefreshCw } from 'lucide-react';
 import axios from 'axios';
 import { useAuth } from '../context/AuthContext';
 import PostCard from '../components/posts/PostCard';
@@ -15,16 +15,20 @@ export const FeedPage = () => {
   const [feedType, setFeedType] = useState('explore'); // 'explore' or 'following'
 
   // Filter states
-  const [searchQuery, setSearchQuery] = useState('');
   const [selectedLocation, setSelectedLocation] = useState('');
 
   // Ref for the sentinel element observed by IntersectionObserver (Requirement Topic 5)
   const observerTargetRef = useRef(null);
   const observerInstanceRef = useRef(null);
+  const activeRequestRef = useRef(null);
 
   // Fetch posts from backend with server pagination
   const fetchPosts = useCallback(async (pageNum, isReset = false) => {
-    if (loading) return;
+    if (activeRequestRef.current && !isReset) return;
+    if (activeRequestRef.current) activeRequestRef.current.abort();
+
+    const controller = new AbortController();
+    activeRequestRef.current = controller;
     try {
       setLoading(true);
       const params = {
@@ -32,27 +36,36 @@ export const FeedPage = () => {
         limit: 5,
         feedType: isAuthenticated ? feedType : 'explore'
       };
-      if (searchQuery) params.search = searchQuery;
       if (selectedLocation) params.location = selectedLocation;
 
       const headers = token ? { Authorization: `Bearer ${token}` } : {};
-      const res = await axios.get('/api/posts', { params, headers });
+      const res = await axios.get('/api/posts', { params, headers, signal: controller.signal });
 
       const newPosts = res.data.data || [];
       setPosts((prev) => (isReset ? newPosts : [...prev, ...newPosts]));
       setHasMore(res.data.hasMore);
       setPage(pageNum);
     } catch (err) {
-      console.error('[Feed Error]:', err);
+      if (!axios.isCancel(err)) console.error('[Feed Error]:', err);
     } finally {
-      setLoading(false);
+      if (activeRequestRef.current === controller) {
+        activeRequestRef.current = null;
+        setLoading(false);
+      }
     }
-  }, [feedType, searchQuery, selectedLocation, token, isAuthenticated]);
+  }, [feedType, selectedLocation, token, isAuthenticated]);
 
   // Initial load or when filters change
   useEffect(() => {
-    fetchPosts(1, true);
-  }, [feedType, searchQuery, selectedLocation]);
+    let isCancelled = false;
+    Promise.resolve().then(() => {
+      if (!isCancelled) fetchPosts(1, true);
+    });
+    return () => {
+      isCancelled = true;
+      activeRequestRef.current?.abort();
+    };
+  }, [feedType, selectedLocation, fetchPosts]);
 
   // Setup IntersectionObserver for Infinite Scroll (Requirement Topic 5)
   useEffect(() => {

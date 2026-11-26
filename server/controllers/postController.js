@@ -364,12 +364,27 @@ export const updatePost = async (req, res, next) => {
   try {
     const { title, content, location, travelDate, cost, visibility, lat, lng } = req.body;
     let newImages = null;
-    if (req.files && req.files.length > 0) {
-      newImages = req.files.map((file) => `/uploads/${file.filename}`);
-    } else if (req.body.images) {
-      const parsedImages = Array.isArray(req.body.images) ? req.body.images : [req.body.images];
-      if (parsedImages.length <= 6) {
-        newImages = parsedImages;
+    let retainedImages = [];
+    if (req.body.existingImages !== undefined) {
+      try {
+        retainedImages = JSON.parse(req.body.existingImages);
+      } catch {
+        return res.status(400).json({ success: false, message: 'Danh sách ảnh hiện có không hợp lệ' });
+      }
+      if (!Array.isArray(retainedImages) || retainedImages.some((image) => typeof image !== 'string')) {
+        return res.status(400).json({ success: false, message: 'Danh sách ảnh hiện có không hợp lệ' });
+      }
+    } else if (req.body.images !== undefined) {
+      retainedImages = Array.isArray(req.body.images) ? req.body.images : [req.body.images];
+    }
+
+    if (req.files?.length || req.body.existingImages !== undefined || req.body.images !== undefined) {
+      newImages = [
+        ...retainedImages,
+        ...(req.files || []).map((file) => `/uploads/${file.filename}`)
+      ];
+      if (newImages.length > 6) {
+        return res.status(400).json({ success: false, message: 'Mỗi bài viết chỉ được đính kèm tối đa 6 ảnh' });
       }
     }
 

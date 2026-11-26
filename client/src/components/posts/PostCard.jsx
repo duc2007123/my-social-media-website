@@ -127,6 +127,17 @@ export const PostCard = ({ post, onPostDeleted }) => {
           )}
 
           {(isAuthor || isAdmin) && (
+            <Link
+              to={`/edit-post/${post._id}`}
+              className="p-1.5 text-slate-400 hover:text-emerald-600 rounded-lg hover:bg-emerald-50 transition-colors"
+              title="Chỉnh sửa bài viết"
+              aria-label="Chỉnh sửa bài viết"
+            >
+              <Edit3 className="w-4 h-4" />
+            </Link>
+          )}
+
+          {(isAuthor || isAdmin) && (
             <button
               onClick={handleDelete}
               className="p-1.5 text-slate-400 hover:text-rose-600 rounded-lg hover:bg-rose-50 transition-colors"
